@@ -10,7 +10,7 @@ chrono = "0.4.42"
 config = "0.15.18"
 dropshot = "0.16.4"
 futures-util = "0.3.31"
-jsonwebtoken = { version = "10.1.0", features = ["rsa", "rust_crypto"] }
+jsonwebtoken = { version = "10.3.0", features = ["rsa", "rust_crypto"] }
 oso = "0.27.3"
 oxide = "0.14.0"
 reqwest = { version = "0.12.23", default-features = false, features = ["http2", "json", "rustls-tls"] }

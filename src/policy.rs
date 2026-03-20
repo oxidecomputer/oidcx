@@ -46,6 +46,12 @@ impl Policy {
                 },
             ),
             TokenRequest::GitHub(github) => {
+                // We require at least one repository and one permission to be present. If either
+                // is empty we would not actually run the `ensure_permutation` check which evaluates
+                // the policy against the repositories and permissions provided.
+                if github.repositories.is_empty() || github.permissions.is_empty() {
+                    return Err(PolicyError::InvalidTokenRequest);
+                }
                 for repository in &github.repositories {
                     let repository_visibility = self.github_visibility(repository).await?;
 
@@ -174,4 +180,6 @@ pub enum PolicyError {
     NotMatching(String),
     #[error("failed to retrieve the repository visibility for {0}")]
     GetVisibility(String, #[source] GitHubTokenError),
+    #[error("invalid token request")]
+    InvalidTokenRequest,
 }

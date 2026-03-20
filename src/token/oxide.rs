@@ -80,7 +80,9 @@ impl OxideTokens {
         for (silo, token_path) in &settings.silos {
             let token = std::fs::read_to_string(&token_path)
                 .map_err(|e| OxideError::ReadToken(token_path.clone(), e))?;
-            let config = ClientConfig::default().with_host_and_token(silo, token);
+
+            // Trailing newlines will break token parsing
+            let config = ClientConfig::default().with_host_and_token(silo, token.trim());
             clients.insert(
                 silo.clone(),
                 Client::new_authenticated_config(&config)

@@ -2,3 +2,6 @@ target
 
 settings.toml
 policy.polar
+
+token-*
+github.pem

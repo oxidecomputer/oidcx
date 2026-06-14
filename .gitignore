@@ -4,3 +4,5 @@ target
 settings.toml
 policy.polar
 policy.cedar
+token-*
+github.pem

@@ -101,12 +101,11 @@ impl OxideTokens {
             return Err(OxideError::NotConfigured.into());
         };
 
-        if request.duration <= 0 && !state.allow_tokens_without_expiry {
-            return Err(OxideError::NoExpirationDisallowed.into());
-        }
-        if request.duration > state.max_duration {
-            return Err(OxideError::TooLongExpiration(state.max_duration).into());
-        }
+        validate_duration(
+            request.duration,
+            state.allow_tokens_without_expiry,
+            state.max_duration,
+        )?;
 
         let client = state
             .clients
@@ -185,4 +184,82 @@ struct State {
     clients: HashMap<String, Client>,
     allow_tokens_without_expiry: bool,
     max_duration: u32,
+}
+
+/// Validate the requested token lifetime against the instance's policy.
+///
+/// A duration of `0` means "no expiration" and is only permitted when the
+/// instance explicitly allows it. Any duration above `max_duration` is
+/// rejected. Note `duration` is a `u32`, so `0` is the only "non-positive"
+/// value that can occur.
+fn validate_duration(
+    duration: u32,
+    allow_tokens_without_expiry: bool,
+    max_duration: u32,
+) -> Result<(), OxideError> {
+    if duration == 0 && !allow_tokens_without_expiry {
+        return Err(OxideError::NoExpirationDisallowed);
+    }
+    if duration > max_duration {
+        return Err(OxideError::TooLongExpiration(max_duration));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAX: u32 = 3600;
+
+    #[test]
+    fn rejects_zero_duration_when_expiry_required() {
+        let err = validate_duration(0, false, MAX).unwrap_err();
+        assert!(
+            matches!(err, OxideError::NoExpirationDisallowed),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn allows_zero_duration_when_configured() {
+        validate_duration(0, true, MAX)
+            .expect("a zero duration must be allowed when the instance permits it");
+    }
+
+    #[test]
+    fn allows_normal_duration() {
+        validate_duration(300, false, MAX).expect("an in-bounds duration must be allowed");
+    }
+
+    #[test]
+    fn allows_duration_at_max_boundary() {
+        validate_duration(MAX, false, MAX).expect("a duration equal to the max must be allowed");
+    }
+
+    #[test]
+    fn rejects_duration_exceeding_max() {
+        let err = validate_duration(MAX + 1, false, MAX).unwrap_err();
+        assert!(
+            matches!(err, OxideError::TooLongExpiration(m) if m == MAX),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_overlong_duration_even_when_no_expiry_allowed() {
+        // allow_tokens_without_expiry only relaxes the zero case; it must not
+        // permit a duration above the maximum.
+        let err = validate_duration(MAX + 1, true, MAX).unwrap_err();
+        assert!(
+            matches!(err, OxideError::TooLongExpiration(m) if m == MAX),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn duration_errors_are_safe_to_expose() {
+        assert!(OxideError::NoExpirationDisallowed.safe_to_expose());
+        assert!(OxideError::TooLongExpiration(MAX).safe_to_expose());
+    }
 }

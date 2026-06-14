@@ -1,0 +1,62 @@
+// Authorization schema for oidcx.
+// Documentation: https://github.com/oxidecomputer/oidcx#authorization-policy
+//
+// Principal: a GitHub Actions workflow run, carrying OIDC claims.
+// Resource:  a GitHub repository or an Oxide silo being accessed.
+// Action:    the permission being requested.
+
+namespace Oidcx {
+
+    // A GitHub Actions workflow run identified by its OIDC token claims.
+    entity WorkflowRun = {
+        repository: String,
+        repository_owner: String,
+        repository_visibility: String,
+        event_name: String,
+        environment?: String,
+        iss: String,
+    };
+
+    // A GitHub repository that is the target of a token request.
+    entity Repository = {
+        name: String,
+        visibility: String,
+    };
+
+    // An Oxide silo that is the target of a deployment.
+    entity Silo = {
+        url?: String,
+    };
+
+    // GitHub repository permissions
+    action "contents:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    action "contents:write" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    action "pull_requests:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    action "pull_requests:write" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    action "actions:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Oxide silo deployment
+    action "deploy" appliesTo {
+        principal: WorkflowRun,
+        resource: Silo,
+    };
+}

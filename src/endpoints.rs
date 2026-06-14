@@ -60,18 +60,23 @@ pub async fn exchange(
         .clone();
 
     // Continue to the next authorization if the token does not match the required constraints
-    let claims = provider
-        .read()
-        .unwrap()
-        .config
-        .validate(&ctx.settings, &body.caller_identity)
-        .map_err(|err| {
-            tracing::info!(?err, "Failed to validate token");
-            HttpError::for_bad_request(None, "Token validation failed".to_string())
-        })?;
+    let principal = {
+        let provider = provider.read().unwrap();
+        let claims = provider
+            .config
+            .validate(&ctx.settings, &body.caller_identity)
+            .map_err(|err| {
+                tracing::info!(?err, "Failed to validate token");
+                HttpError::for_bad_request(None, "Token validation failed".to_string())
+            })?;
+        (provider.build_principal)(&claims).map_err(|err| {
+            tracing::info!(?err, "Failed to construct principal");
+            HttpError::for_bad_request(None, format!("Failed to construct principal: {err}"))
+        })?
+    };
 
     ctx.policy
-        .ensure_allowed(&claims, &body.request)
+        .ensure_allowed(&principal, &body.request)
         .await
         .map_err(|err| {
             tracing::info!(?err, "Failed to match the token against the policy");

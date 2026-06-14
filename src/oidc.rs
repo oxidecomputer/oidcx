@@ -6,7 +6,6 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Validation,
     jwk::{JwkSet, KeyAlgorithm},
 };
-use oso::{PolarValue, ToPolar};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 use thiserror::Error;
@@ -136,14 +135,12 @@ pub struct Claims {
     claims: HashMap<String, ClaimValue>,
 }
 
-impl ToPolar for Claims {
-    fn to_polar(self) -> PolarValue {
-        PolarValue::Map(
-            self.claims
-                .into_iter()
-                .map(|(k, v)| (k, v.to_polar()))
-                .collect(),
-        )
+impl Claims {
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        match self.claims.get(key)? {
+            ClaimValue::String(s) => Some(s.as_str()),
+            ClaimValue::Number(_) => None,
+        }
     }
 }
 
@@ -159,15 +156,6 @@ impl std::fmt::Debug for ClaimValue {
         match self {
             Self::Number(val) => std::fmt::Debug::fmt(val, f),
             Self::String(val) => std::fmt::Debug::fmt(val, f),
-        }
-    }
-}
-
-impl ToPolar for ClaimValue {
-    fn to_polar(self) -> PolarValue {
-        match self {
-            ClaimValue::Number(number) => PolarValue::Integer(number),
-            ClaimValue::String(string) => PolarValue::String(string),
         }
     }
 }

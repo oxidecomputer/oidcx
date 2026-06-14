@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
 
-use crate::oidc::OidcProvider;
+use crate::providers::ProviderConfig;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
@@ -16,7 +16,7 @@ pub struct Settings {
     pub policy_path: PathBuf,
     pub log_directory: Option<String>,
     pub port: Option<u16>,
-    pub providers: Vec<OidcProvider>,
+    pub providers: Vec<ProviderConfig>,
     #[serde(default)]
     pub oxide: Option<SettingsOxide>,
     #[serde(default)]

@@ -13,7 +13,7 @@ use crate::{
     endpoints::Token,
     oauth::{DeviceAccessTokenError, DeviceAccessTokenGrant, DeviceAuthorizationResponse},
     settings::Settings,
-    util::{ByteStreamError, parse_bytestream},
+    util::{ByteStreamError, Url, parse_bytestream},
 };
 
 static CLIENT_ID: &str = "730ae5f1-a728-4a5d-9a06-cf09b653cca6";
@@ -61,7 +61,7 @@ impl OxideError {
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Hash, PartialEq, Eq)]
 pub struct OxideTokenRequest {
-    pub silo: String,
+    pub silo: Url,
     pub duration: u32,
 }
 
@@ -110,8 +110,8 @@ impl OxideTokens {
 
         let client = state
             .clients
-            .get(&request.silo)
-            .ok_or_else(|| OxideError::SiloNotConfigured(request.silo.clone()))?;
+            .get(&*request.silo.as_str())
+            .ok_or_else(|| OxideError::SiloNotConfigured(request.silo.to_string()))?;
 
         let device_response = match client
             .device_auth_request()

@@ -4,9 +4,71 @@
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+use schemars::JsonSchema;
+use schemars::schema::{InstanceType, SchemaObject, StringValidation};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::{fmt, ops::Deref, str::FromStr};
 use thiserror::Error;
+
+/// A newtype wrapper around [`reqwest::Url`] that implements [`JsonSchema`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Url(reqwest::Url);
+
+impl Url {
+    pub fn into_inner(self) -> reqwest::Url {
+        self.0
+    }
+}
+
+impl Deref for Url {
+    type Target = reqwest::Url;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl fmt::Display for Url {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for Url {
+    type Err = <reqwest::Url as FromStr>::Err;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        reqwest::Url::from_str(s).map(Url)
+    }
+}
+
+impl From<reqwest::Url> for Url {
+    fn from(url: reqwest::Url) -> Self {
+        Url(url)
+    }
+}
+
+impl JsonSchema for Url {
+    fn schema_name() -> String {
+        "Url".to_string()
+    }
+
+    fn json_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            format: Some("uri".to_string()),
+            string: Some(Box::new(StringValidation {
+                min_length: Some(1),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+        .into()
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ByteStreamError {

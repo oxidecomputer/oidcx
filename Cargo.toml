@@ -1,6 +1,6 @@
 [package]
 name = "oidcx"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
 
 [dependencies]
@@ -11,7 +11,7 @@ config = "0.15.18"
 dropshot = "0.16.4"
 futures-util = "0.3.31"
 jsonwebtoken = { version = "10.1.0", features = ["rsa", "rust_crypto"] }
-oso = "0.27.3"
+cedar-policy = "4"
 oxide = "0.14.0"
 reqwest = { version = "0.12.23", default-features = false, features = ["http2", "json", "rustls-tls"] }
 schemars = "0.8.22"
@@ -27,3 +27,6 @@ tracing = "0.1.41"
 tracing-appender = "0.2.3"
 tracing-slog = { git = "https://github.com/oxidecomputer/tracing-slog", default-features = false }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+base64 = "0.22"

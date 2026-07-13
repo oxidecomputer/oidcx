@@ -9,16 +9,17 @@ use std::{
 };
 use thiserror::Error;
 
+use cedar_policy::{Entity, PolicySet, Schema};
+
 use crate::{
-    oidc::{OidcError, ResolvedOidcConfig},
-    policy::Policy,
+    oidc::{Claims, OidcError, OidcProvider, ResolvedOidcConfig},
+    policy::{Policy, PolicyError},
     settings::Settings,
     token::{
         github::{GitHubTokenError, GitHubTokens},
         oxide::{OxideError, OxideTokens},
     },
 };
-use oso::OsoError;
 
 #[derive(Debug, Error)]
 pub enum ContextBuildError {
@@ -30,13 +31,20 @@ pub enum ContextBuildError {
     GitHubTokens(#[from] GitHubTokenError),
     #[error("Encountered an error configuring OIDC providers")]
     Oidc(#[from] OidcError),
-    #[error("Failed to initialize the Oso policy")]
-    Oso(#[from] OsoError),
+    #[error("Failed to initialize the Cedar policy engine")]
+    Policy(#[from] PolicyError),
 }
+
+/// A function that builds a Cedar principal [`Entity`] from validated OIDC
+/// [`Claims`]. Each identity provider has its own builder because different
+/// issuers produce tokens with different claim structures and map to different
+/// Cedar entity types.
+pub type PrincipalBuilder = fn(&Claims) -> Result<Entity, PolicyError>;
 
 #[derive(Debug)]
 pub struct ResolvedOidcProvider {
     pub config: ResolvedOidcConfig,
+    pub build_principal: PrincipalBuilder,
 }
 
 #[derive(Debug)]
@@ -53,23 +61,41 @@ impl Context {
         let client = reqwest::Client::new();
 
         let mut providers = HashMap::new();
-        for provider in &settings.providers {
-            let resolved = ResolvedOidcProvider {
-                config: provider
-                    .fetch_config(&client)
-                    .await?
-                    .resolve(&client)
-                    .await?,
-            };
-            let issuer = resolved.config.issuer.clone();
-            providers.insert(issuer, Arc::new(RwLock::new(resolved)));
+        for provider_config in &settings.providers {
+            let config = OidcProvider::new(provider_config.url().to_string())
+                .fetch_config(&client)
+                .await?
+                .resolve(&client)
+                .await?;
+
+            let issuer = config.issuer.clone();
+            providers.insert(
+                issuer,
+                Arc::new(RwLock::new(ResolvedOidcProvider {
+                    config,
+                    build_principal: provider_config.principal_builder(),
+                })),
+            );
         }
 
         let github_tokens = GitHubTokens::new(&settings)?;
 
+        let base = settings.policy_path.with_extension("");
+
+        let schema_path = base.with_extension("cedarschema");
+        let schema_src = std::fs::read_to_string(&schema_path)
+            .map_err(|err| PolicyError::ReadFile(schema_path, err))?;
+        let (schema, _warnings) =
+            Schema::from_cedarschema_str(&schema_src).map_err(PolicyError::InitSchema)?;
+
+        let cedar_path = base.with_extension("cedar");
+        let policy_src = std::fs::read_to_string(&cedar_path)
+            .map_err(|err| PolicyError::ReadFile(cedar_path, err))?;
+        let policy_set: PolicySet = policy_src.parse().map_err(PolicyError::InitPolicy)?;
+
         Ok(Context {
             providers,
-            policy: Policy::new(&settings.policy_path, github_tokens.clone())?,
+            policy: Policy::new(schema, policy_set, github_tokens.clone()),
             oxide_tokens: OxideTokens::new(&settings)?,
             github_tokens,
             settings,

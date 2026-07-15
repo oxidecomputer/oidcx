@@ -487,6 +487,7 @@ mod tests {
             providers: vec![],
             oxide: None,
             github: None,
+            params_base_path: None,
         };
         let github_tokens = crate::token::github::GitHubTokens::new(&settings)
             .expect("failed to create dummy GitHubTokens");

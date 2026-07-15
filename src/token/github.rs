@@ -7,12 +7,13 @@ use crate::settings::Settings;
 use jsonwebtoken::{Algorithm, EncodingKey};
 use reqwest::{Client, RequestBuilder, StatusCode};
 use schemars::JsonSchema;
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use v_api_param::ParamResolutionError;
 
 static USER_AGENT: &str = "https://github.com/oxidecomputer/oidcx";
 
@@ -120,15 +121,16 @@ pub struct GitHubTokens {
 
 impl GitHubTokens {
     pub fn new(settings: &Settings) -> Result<Self, GitHubTokenError> {
-        if let Some(settings) = &settings.github {
-            let private_key = std::fs::read(&settings.private_key_path).map_err(|e| {
-                GitHubTokenError::ReadPrivateKey(settings.private_key_path.clone(), e)
-            })?;
+        let base = settings.params_base_path.as_deref();
+        if let Some(github) = &settings.github {
+            // The key may be inline or read from a file on the parameters
+            // volume; `resolve` performs any required I/O.
+            let private_key = github.private_key.resolve(base)?;
             Ok(GitHubTokens {
                 state: Some(Arc::new(State {
                     client: Client::new(),
-                    client_id: settings.client_id.clone(),
-                    private_key: EncodingKey::from_rsa_pem(&private_key)
+                    client_id: github.client_id.clone(),
+                    private_key: EncodingKey::from_rsa_pem(private_key.expose_secret().as_bytes())
                         .map_err(GitHubTokenError::LoadPrivateKey)?,
                 })),
             })
@@ -275,8 +277,8 @@ where
 pub enum GitHubTokenError {
     #[error("GitHub credentials are not configured for this instance of oidcx")]
     NoCredentials,
-    #[error("failed to read the GitHub App private key located at {}", .0.display())]
-    ReadPrivateKey(PathBuf, #[source] std::io::Error),
+    #[error("Failed to resolve the GitHub App private key")]
+    ResolveParam(#[from] ParamResolutionError),
     #[error("Failed to load the GitHub App private key")]
     LoadPrivateKey(#[source] jsonwebtoken::errors::Error),
     #[error("Failed to encode the JWT")]
@@ -302,7 +304,7 @@ pub enum GitHubTokenError {
 impl GitHubTokenError {
     pub fn safe_to_expose(&self) -> bool {
         match self {
-            GitHubTokenError::ReadPrivateKey(..)
+            GitHubTokenError::ResolveParam(..)
             | GitHubTokenError::LoadPrivateKey(..)
             | GitHubTokenError::EncodeJwt(..)
             | GitHubTokenError::Http(..) => false,
@@ -480,10 +482,10 @@ mod tests {
 
     #[test]
     fn private_key_errors_are_not_exposed() {
-        let err = GitHubTokenError::ReadPrivateKey(
-            "/secret/key.pem".into(),
-            std::io::Error::other("boom"),
-        );
+        let err = GitHubTokenError::ResolveParam(ParamResolutionError::FileRead {
+            path: "/secret/key.pem".into(),
+            source: std::io::Error::other("boom"),
+        });
         assert!(
             !err.safe_to_expose(),
             "private key path/IO errors must not be exposed to clients"

@@ -4,10 +4,12 @@
 
 use oxide::{ByteStream, Client, ClientConfig, ClientConsoleAuthExt, OxideAuthError};
 use schemars::JsonSchema;
+use secrecy::ExposeSecret;
 use serde::Deserialize;
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 use tap::TapFallible;
 use thiserror::Error;
+use v_api_param::ParamResolutionError;
 
 use crate::{
     endpoints::Token,
@@ -24,8 +26,8 @@ pub enum OxideError {
     ByteStream(#[from] ByteStreamError),
     #[error("Failed to issue device access token request")]
     DeviceAuthRequest(#[from] DeviceAccessTokenError),
-    #[error("Silo token located at {0} is malformed")]
-    ReadToken(PathBuf, #[source] std::io::Error),
+    #[error("Failed to resolve the silo manifest or a silo credential")]
+    ResolveParam(#[from] ParamResolutionError),
     #[error("The silo {0} is not configured in this instance of oidcx")]
     SiloNotConfigured(String),
     #[error("Failed to authenticate with silo {0}")]
@@ -50,7 +52,7 @@ impl OxideError {
             | OxideError::AuthFailed(..)
             | OxideError::Oxide(..)
             | OxideError::OxideByteError(..)
-            | OxideError::ReadToken(..) => false,
+            | OxideError::ResolveParam(..) => false,
             OxideError::SiloNotConfigured(..)
             | OxideError::NotConfigured
             | OxideError::NoExpirationDisallowed
@@ -72,28 +74,34 @@ pub struct OxideTokens {
 
 impl OxideTokens {
     pub fn new(settings: &Settings) -> Result<Self, OxideError> {
-        let Some(settings) = &settings.oxide else {
+        let base = settings.params_base_path.as_deref();
+
+        let Some(oxide) = &settings.oxide else {
             return Ok(Self { state: None });
         };
 
-        let mut clients = HashMap::new();
-        for (silo, token_path) in &settings.silos {
-            let token = std::fs::read_to_string(&token_path)
-                .map_err(|e| OxideError::ReadToken(token_path.clone(), e))?;
+        // The set of silos is environment-specific and unknown at build time,
+        // so it lives in a manifest on the parameters volume rather than in the
+        // static settings.toml. Resolving the `JsonParam` reads and parses that
+        // manifest into a `url -> credential` map.
+        let manifest = oxide.silos.resolve(base)?;
 
-            // Trailing newlines will break token parsing
-            let config = ClientConfig::default().with_host_and_token(silo, token.trim());
+        let mut clients = HashMap::new();
+        for (url, credential) in manifest {
+            let token = credential.resolve(base)?;
+
+            let config = ClientConfig::default().with_host_and_token(&url, token.expose_secret());
             clients.insert(
-                silo.clone(),
+                url.clone(),
                 Client::new_authenticated_config(&config)
-                    .map_err(|e| OxideError::AuthFailed(silo.clone(), e))?,
+                    .map_err(|e| OxideError::AuthFailed(url, e))?,
             );
         }
         Ok(Self {
             state: Some(State {
                 clients,
-                allow_tokens_without_expiry: settings.allow_tokens_without_expiry,
-                max_duration: settings.max_duration,
+                allow_tokens_without_expiry: oxide.allow_tokens_without_expiry,
+                max_duration: oxide.max_duration,
             }),
         })
     }

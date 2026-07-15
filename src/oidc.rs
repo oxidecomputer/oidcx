@@ -285,6 +285,7 @@ mod jwt_validation_tests {
             providers: vec![],
             oxide: None,
             github: None,
+            params_base_path: None,
         }
     }
 

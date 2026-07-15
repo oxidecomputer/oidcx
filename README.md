@@ -175,6 +175,12 @@ files can be passed to the command line, and they will be merged. If no path to
 a configuration file is passed the `settings.toml` file from the current
 directory will be loaded.
 
+File-backed parameters (the Oxide silo manifest and its credentials, and the
+GitHub App private key, all specified as `{ path = "..." }`) are resolved
+relative to the directory in the `PARAMS_BASE_PATH` environment variable, read
+once at startup. When `PARAMS_BASE_PATH` is unset, those paths are used as-is
+(absolute, or relative to the working directory).
+
 ```toml
 # Path to the Polar file defining the authorization policy. Required.
 policy_path = "path/to/policy.polar"
@@ -199,12 +205,26 @@ log_directory = "path/to/logs"
 [[providers]]
 url = "https://token.actions.githubusercontent.com/.well-known/openid-configuration"
 
-# The [oxide_silos] block defines the list of Oxide silos a token can be
-# requested for, and the credential used to generate those tokens. The block is
-# optional, and if omitted no Oxide silo tokens will be issued.
-[oxide_silos]
-"https://oxide.sys.rack2.eng.oxide.computer" = "path/to/oxide-token"
-"https://example.sys.rack2.eng.oxide.computer" = "path/to/example-token"
+# The [oxide] block enables issuing Oxide silo tokens. The block is optional,
+# and if omitted no Oxide silo tokens will be issued.
+#
+# Because settings.toml is baked identically into every environment, it cannot
+# enumerate the silos itself (their number and names differ per environment).
+# Instead `silos` is a v-api SerializedParam that points at a JSON manifest on
+# the parameters volume via a fixed path (the same path everywhere; only the
+# file it points at changes per environment).
+[oxide]
+silos = { path = "/params/oxide-silos.json" }
+
+# The manifest is a JSON object mapping each silo url to the credential used to
+# mint tokens for it. Each credential is a v-api StringParam: either an inline
+# secret or a { "path": "..." } reference to a secret file on the volume. For
+# example, the file at /params/oxide-silos.json might contain:
+#
+#   {
+#     "https://oxide.sys.rack2.eng.oxide.computer": { "path": "/params/oxide-token" },
+#     "https://example.sys.rack2.eng.oxide.computer": { "path": "/params/example-token" }
+#   }
 
 # The [github] block defines the GitHub App used to issue GitHub tokens. The app
 # must be installed on all repositories a token can be generated for, and must
@@ -212,5 +232,5 @@ url = "https://token.actions.githubusercontent.com/.well-known/openid-configurat
 # optional, and if omitted no GitHub tokens will be issued.
 [github]
 client_id = "Iv2AAAAAAAAAAAAAAAAA"
-private_key_path = "path/to/private-key.pem"
+private_key = { path = "path/to/private-key.pem" }
 ```

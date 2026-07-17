@@ -84,6 +84,14 @@ Note that credentials for the requested silo must be present in oidcx's
 configuration. The resulting token will have the same level of access as the
 credential in the configuration.
 
+Silo URLs are compared in a canonical form that follows the `url` crate's
+normalization: the scheme and host are lowercased, the default port is dropped,
+and an explicit path is always present. In particular a host-only URL is
+serialized with a trailing slash, so the silo URL literals in the authorization
+policy must include it (for example `https://oxide.sys.rack2.eng.oxide.computer/`).
+Manifest keys are parsed and re-serialized through the same normalization, so
+they may be written in either form.
+
 [gh-perms]: https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps?apiVersion=2022-11-28
 
 ## Authorization policy

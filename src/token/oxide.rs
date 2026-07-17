@@ -30,6 +30,8 @@ pub enum OxideError {
     ResolveParam(#[from] ParamResolutionError),
     #[error("The silo {0} is not configured in this instance of oidcx")]
     SiloNotConfigured(String),
+    #[error("The configured silo url {0} is not a valid url: {1}")]
+    InvalidSiloUrl(String, String),
     #[error("Failed to authenticate with silo {0}")]
     AuthFailed(String, #[source] OxideAuthError),
     #[error("Remote service error")]
@@ -52,7 +54,8 @@ impl OxideError {
             | OxideError::AuthFailed(..)
             | OxideError::Oxide(..)
             | OxideError::OxideByteError(..)
-            | OxideError::ResolveParam(..) => false,
+            | OxideError::ResolveParam(..)
+            | OxideError::InvalidSiloUrl(..) => false,
             OxideError::SiloNotConfigured(..)
             | OxideError::NotConfigured
             | OxideError::NoExpirationDisallowed
@@ -88,13 +91,24 @@ impl OxideTokens {
 
         let mut clients = HashMap::new();
         for (url, credential) in manifest {
+            // The credential may be inline or read from a file on the volume.
+            // `resolve` performs any required I/O and trims trailing newlines,
+            // which would otherwise break token parsing.
             let token = credential.resolve(base)?;
 
-            let config = ClientConfig::default().with_host_and_token(&url, token.expose_secret());
+            // Normalize the manifest key through the same canonical form used
+            // to look up clients for an incoming request, so the two always
+            // agree regardless of trailing slash, host case, or default port.
+            let silo = url
+                .parse::<reqwest::Url>()
+                .map_err(|e| OxideError::InvalidSiloUrl(url.clone(), e.to_string()))?
+                .to_string();
+
+            let config = ClientConfig::default().with_host_and_token(&silo, token.expose_secret());
             clients.insert(
-                url.clone(),
+                silo.clone(),
                 Client::new_authenticated_config(&config)
-                    .map_err(|e| OxideError::AuthFailed(url, e))?,
+                    .map_err(|e| OxideError::AuthFailed(silo, e))?,
             );
         }
         Ok(Self {
@@ -119,7 +133,7 @@ impl OxideTokens {
 
         let client = state
             .clients
-            .get(&*request.silo.as_str())
+            .get(&request.silo.to_string())
             .ok_or_else(|| OxideError::SiloNotConfigured(request.silo.to_string()))?;
 
         let device_response = match client

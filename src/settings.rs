@@ -70,7 +70,7 @@ pub struct SettingsOxide {
 
 #[derive(Debug, Deserialize)]
 pub struct SettingsGitHubApp {
-    pub client_id: String,
+    pub client_id: StringParam,
     /// PEM-encoded GitHub App private key. May be provided inline or, more
     /// commonly, as a `{ path = "..." }` reference to a key file on the
     /// parameters volume.

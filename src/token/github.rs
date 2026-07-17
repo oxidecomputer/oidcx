@@ -129,7 +129,7 @@ impl GitHubTokens {
             Ok(GitHubTokens {
                 state: Some(Arc::new(State {
                     client: Client::new(),
-                    client_id: github.client_id.clone(),
+                    client_id: github.client_id.resolve(base)?.expose_secret().to_string(),
                     private_key: EncodingKey::from_rsa_pem(private_key.expose_secret().as_bytes())
                         .map_err(GitHubTokenError::LoadPrivateKey)?,
                 })),

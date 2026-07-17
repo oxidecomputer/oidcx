@@ -444,6 +444,8 @@ mod tests {
         let entity = Policy::silo_entity(&url).unwrap();
         assert_eq!(
             entity.attr("url").unwrap().unwrap(),
+            // Canonical form follows reqwest::Url serialization, which includes
+            // the explicit root-path trailing slash.
             EvalResult::String("https://corp-staging.sys.r3.oxide-preview.com/".into())
         );
     }
@@ -605,6 +607,93 @@ mod tests {
         assert!(
             matches!(err, PolicyError::NotMatching(_)),
             "expected NotMatching, got: {err:?}"
+        );
+    }
+
+    /// Helper: a workflow-run principal, as a deploy request from that pipeline would present.
+    fn production_claims() -> Claims {
+        Claims::from_json(serde_json::json!({
+            "jti": "deploy-run",
+            "iss": "https://token.actions.githubusercontent.com",
+            "repository": "oxidecomputer/private-repo",
+            "repository_owner": "oxidecomputer",
+            "repository_visibility": "private",
+            "event_name": "push",
+            "environment": "production",
+        }))
+    }
+
+    /// A deploy request for the a production silo
+    fn prod_deploy_request() -> crate::endpoints::TokenRequest {
+        crate::endpoints::TokenRequest::Oxide(crate::token::oxide::OxideTokenRequest {
+            silo: "https://prod.sys.oxide-preview.com".parse().unwrap(),
+            duration: 3600,
+        })
+    }
+
+    // Regression tests for the URL-normalization contract between
+    // `silo_entity` and the deploy permits in the shipped Cedar policy.
+    //
+    // `silo_entity` stores the canonical form produced by `util::canonical_url`,
+    // which is `reqwest::Url`'s normalized serialization and therefore includes
+    // the explicit root-path trailing slash.
+
+    #[tokio::test]
+    async fn deploy_permit_with_canonical_url_literal_matches() {
+        // The URL literal includes the trailing slash, matching the canonical
+        // reqwest serialization `silo_entity` emits. This is the shape the
+        // shipped policy must use, and this test is the known-good fixture
+        // guarding against the permit going dead again.
+        let policy = policy_with(
+            r#"
+            permit(
+                principal is Oidcx::WorkflowRun,
+                action == Oidcx::Action::"deploy",
+                resource is Oidcx::Silo
+            ) when {
+                principal.repository == "oxidecomputer/private-repo" &&
+                principal has environment &&
+                principal.environment == "production" &&
+                resource.url == "https://prod.sys.oxide-preview.com/"
+            };
+        "#,
+        );
+        let principal = workflow_run_entity(&production_claims()).unwrap();
+
+        policy
+            .ensure_allowed(&principal, &prod_deploy_request())
+            .await
+            .expect("a deploy permit using the canonical trailing-slash URL must authorize");
+    }
+
+    #[tokio::test]
+    async fn deploy_permit_without_trailing_slash_never_matches() {
+        // A permit written without the trailing slash cannot match, because the
+        // canonical form always carries reqwest's explicit root path. This
+        // documents the one canonical representation both sides must agree on.
+        let policy = policy_with(
+            r#"
+            permit(
+                principal is Oidcx::WorkflowRun,
+                action == Oidcx::Action::"deploy",
+                resource is Oidcx::Silo
+            ) when {
+                principal.repository == "oxidecomputer/private-repo" &&
+                principal has environment &&
+                principal.environment == "production" &&
+                resource.url == "https://prod.sys.oxide-preview.com"
+            };
+        "#,
+        );
+        let principal = workflow_run_entity(&production_claims()).unwrap();
+
+        let err = policy
+            .ensure_allowed(&principal, &prod_deploy_request())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::NotMatching(_)),
+            "expected a no-trailing-slash literal to never match the canonical url, got: {err:?}"
         );
     }
 

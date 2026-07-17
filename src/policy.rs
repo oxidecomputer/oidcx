@@ -79,6 +79,11 @@ pub fn workflow_run_entity(claims: &Claims) -> Result<Entity, PolicyError> {
     Entity::new(uid, attrs, HashSet::new()).map_err(PolicyError::EntityEvaluation)
 }
 
+/// The set of visibility values GitHub can report for a repository. Used to
+/// decide, without contacting GitHub, whether an authorization outcome could
+/// depend on a repository's (not-yet-fetched) visibility.
+const REPOSITORY_VISIBILITIES: [&str; 3] = ["public", "private", "internal"];
+
 pub struct Policy {
     schema: Schema,
     policy_set: PolicySet,
@@ -117,11 +122,34 @@ impl Policy {
                     return Err(PolicyError::EmptyRequest);
                 }
                 for repository in &github.repositories {
-                    let repository_visibility = self.github_visibility(repository).await?;
-                    let resource = Self::repository_entity(repository, &repository_visibility)?;
-
                     for permission in &github.permissions {
-                        self.authorize(principal, permission, resource.clone())?;
+                        // Evaluate the policy against every possible visibility
+                        // value WITHOUT contacting GitHub first. Fetching the
+                        // real visibility mints an installation token and calls
+                        // the GitHub API - an externally observable side effect.
+                        // Doing that before authorization would let an
+                        // unauthorized caller (e.g. one rejected by the policy's
+                        // out-of-org entrypoint forbid) use this path as a
+                        // private-repository existence oracle.
+                        let mut allowed_for_some = false;
+                        for visibility in REPOSITORY_VISIBILITIES {
+                            let resource = Self::repository_entity(repository, visibility)?;
+                            allowed_for_some =
+                                allowed_for_some || self.decide(principal, permission, resource)?;
+                        }
+
+                        // Denied regardless of the real visibility: reject now,
+                        // before any token is minted or GitHub is queried.
+                        if !allowed_for_some {
+                            return Err(PolicyError::NotMatching(permission.clone()));
+                        }
+
+                        // The decision genuinely depends on visibility and the
+                        // principal is plausibly authorized, so it is now safe
+                        // to fetch it and make the real decision.
+                        let repository_visibility = self.github_visibility(repository).await?;
+                        let resource = Self::repository_entity(repository, &repository_visibility)?;
+                        self.authorize(principal, permission, resource)?;
                     }
                 }
                 Ok(())
@@ -129,12 +157,16 @@ impl Policy {
         }
     }
 
-    pub(crate) fn authorize(
+    /// Evaluate the policy for a single request, returning whether it is
+    /// allowed. This performs no network I/O and has no externally observable
+    /// side effects, so it is safe to call before deciding whether to fetch
+    /// external state such as repository visibility.
+    fn decide(
         &self,
         principal: &Entity,
         action: &str,
         resource: Entity,
-    ) -> Result<(), PolicyError> {
+    ) -> Result<bool, PolicyError> {
         let principal_uid = principal.uid().clone();
         let resource_uid = resource.uid().clone();
 
@@ -155,7 +187,7 @@ impl Policy {
             .is_authorized(&request, &self.policy_set, &entities);
 
         match response.decision() {
-            Decision::Allow => Ok(()),
+            Decision::Allow => Ok(true),
             Decision::Deny => {
                 let errors: Vec<_> = response
                     .diagnostics()
@@ -165,8 +197,21 @@ impl Policy {
                 if !errors.is_empty() {
                     tracing::warn!(?errors, "policy evaluation errors");
                 }
-                Err(PolicyError::NotMatching(action.to_string()))
+                Ok(false)
             }
+        }
+    }
+
+    pub(crate) fn authorize(
+        &self,
+        principal: &Entity,
+        action: &str,
+        resource: Entity,
+    ) -> Result<(), PolicyError> {
+        if self.decide(principal, action, resource)? {
+            Ok(())
+        } else {
+            Err(PolicyError::NotMatching(action.to_string()))
         }
     }
 
@@ -720,6 +765,55 @@ mod tests {
         assert!(
             matches!(err, PolicyError::EmptyRequest),
             "expected EmptyRequest, got: {err:?}"
+        );
+    }
+
+    // Regression tests for the pre-authorization visibility-fetch finding: a
+    // caller the policy cannot authorize must be rejected BEFORE any GitHub
+    // API call. `policy_with` builds a `GitHubTokens` with no credentials, so
+    // any attempt to fetch visibility surfaces as `PolicyError::GetVisibility`.
+    // Asserting `NotMatching` therefore proves no fetch happened.
+
+    #[tokio::test]
+    async fn github_out_of_org_principal_denied_without_fetching_visibility() {
+        // Mirrors the shipped policy: an entrypoint forbid restricts everything
+        // to the oxidecomputer org, alongside a contents:read permit.
+        let policy = policy_with(
+            r#"
+            permit(
+                principal is Oidcx::WorkflowRun,
+                action == Oidcx::Action::"contents:read",
+                resource is Oidcx::Repository
+            );
+            forbid(principal, action, resource)
+            unless { principal.repository_owner == "oxidecomputer" };
+            "#,
+        );
+        // An attacker's own repo yields a validly-signed token that passes JWT
+        // validation but is out-of-org.
+        let claims = Claims::from_json(serde_json::json!({
+            "jti": "attacker-run",
+            "iss": "https://token.actions.githubusercontent.com",
+            "repository": "attacker/probe",
+            "repository_owner": "attacker",
+            "repository_visibility": "public",
+            "event_name": "push",
+        }));
+        let principal = workflow_run_entity(&claims).unwrap();
+        let request =
+            crate::endpoints::TokenRequest::GitHub(crate::token::github::GitHubTokenRequest {
+                repositories: vec!["oxidecomputer/secret-repo".into()],
+                permissions: vec!["contents:read".into()],
+            });
+
+        let err = policy
+            .ensure_allowed(&principal, &request)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::NotMatching(_)),
+            "out-of-org principal must be denied before any visibility fetch \
+             (GetVisibility would indicate a fetch occurred), got: {err:?}"
         );
     }
 }

@@ -79,8 +79,12 @@ pub async fn exchange(
         .ensure_allowed(&principal, &body.request)
         .await
         .map_err(|err| {
+            // Never disclose *why* authorization failed. The specific variant
+            // (e.g. "repository not found" vs "does not match the policy")
+            // would otherwise let an unauthorized caller probe for information
+            // about internal data.
             tracing::info!(?err, "Failed to match the token against the policy");
-            HttpError::for_bad_request(None, format!("Token doesn't match the policy: {err}"))
+            HttpError::for_bad_request(None, "A policy failure occurred".to_string())
         })?;
 
     Ok(HttpResponseOk(match &body.request {

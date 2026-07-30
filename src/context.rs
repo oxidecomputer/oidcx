@@ -82,11 +82,11 @@ impl Context {
 
         let base = settings.policy_path.with_extension("");
 
-        let schema_path = base.with_extension("cedarschema");
-        let schema_src = std::fs::read_to_string(&schema_path)
-            .map_err(|err| PolicyError::ReadFile(schema_path, err))?;
+        // Schemas are defined with the application version itself. Any change to the permission
+        // schema must be introduced as a new version of the application.
+        let schema_src = include_str!("../policy.cedarschema");
         let (schema, _warnings) =
-            Schema::from_cedarschema_str(&schema_src).map_err(PolicyError::InitSchema)?;
+            Schema::from_cedarschema_str(schema_src).map_err(PolicyError::InitSchema)?;
 
         let cedar_path = base.with_extension("cedar");
         let policy_src = std::fs::read_to_string(&cedar_path)

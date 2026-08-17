@@ -11,8 +11,6 @@ use std::{collections::HashMap, fmt::Debug, str::FromStr};
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::settings::Settings;
-
 #[derive(Debug, Error)]
 pub enum OidcError {
     #[error("Invalid OIDC configuration")]
@@ -102,7 +100,7 @@ pub struct ResolvedOidcConfig {
 
 impl ResolvedOidcConfig {
     #[instrument(skip(self, token))]
-    pub fn validate(&self, settings: &Settings, token: &str) -> Result<Claims, OidcError> {
+    pub fn validate(&self, audience: &str, token: &str) -> Result<Claims, OidcError> {
         let header = jsonwebtoken::decode_header(token).map_err(OidcError::InvalidHeader)?;
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
         let jwk = self
@@ -116,7 +114,7 @@ impl ResolvedOidcConfig {
                 .key_algorithm
                 .ok_or(OidcError::MissingKeyAlgorithm)?,
         )?);
-        validation.set_audience(&[&settings.audience]);
+        validation.set_audience(&[audience]);
         validation.set_issuer(&[&self.issuer]);
         // Require these claims to be present. Without this, a token missing
         // `aud` or `iss` could slip past the corresponding checks depending on
@@ -127,7 +125,7 @@ impl ResolvedOidcConfig {
         Ok(Claims {
             claims: jsonwebtoken::decode(token, &decoding_key, &validation)
                 .map_err(|err| {
-                    tracing::info!(?err, expected = ?settings.audience, "Audience does not match");
+                    tracing::info!(?err, expected = ?audience, "Audience does not match");
                     OidcError::InvalidToken(err)
                 })?
                 .claims,
@@ -276,19 +274,6 @@ mod jwt_validation_tests {
         }
     }
 
-    fn test_settings(audience: &str) -> Settings {
-        Settings {
-            audience: audience.to_string(),
-            policy_path: std::path::PathBuf::new(),
-            log_directory: None,
-            port: None,
-            providers: vec![],
-            oxide: None,
-            github: None,
-            params_base_path: None,
-        }
-    }
-
     fn valid_claims() -> serde_json::Value {
         serde_json::json!({
             "iss": TEST_ISSUER,
@@ -312,10 +297,9 @@ mod jwt_validation_tests {
     #[test]
     fn accepts_valid_token() {
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let token = sign_rs256(valid_claims());
         let claims = config
-            .validate(&settings, &token)
+            .validate(TEST_AUDIENCE, &token)
             .expect("a correctly signed token with the right aud/iss/exp should be accepted");
         assert_eq!(claims.get_str("repository"), Some("oxidecomputer/hubris"));
     }
@@ -325,10 +309,11 @@ mod jwt_validation_tests {
         // Token minted for this service but the service expects a different
         // audience — must be rejected (cross-service replay protection).
         let config = test_config();
-        let settings = test_settings("https://some-other-service.example.com");
         let token = sign_rs256(valid_claims());
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config
+                .validate("https://some-other-service.example.com", &token)
+                .is_err(),
             "token with mismatched audience must be rejected"
         );
     }
@@ -338,12 +323,11 @@ mod jwt_validation_tests {
         // A token with no `aud` claim must not be accepted, otherwise a token
         // not scoped to any service could be replayed here.
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut claims = valid_claims();
         claims.as_object_mut().unwrap().remove("aud");
         let token = sign_rs256(claims);
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "token without an aud claim must be rejected"
         );
     }
@@ -351,12 +335,11 @@ mod jwt_validation_tests {
     #[test]
     fn rejects_wrong_issuer() {
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut claims = valid_claims();
         claims["iss"] = serde_json::json!("https://evil.example.com");
         let token = sign_rs256(claims);
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "token with mismatched issuer must be rejected"
         );
     }
@@ -364,12 +347,11 @@ mod jwt_validation_tests {
     #[test]
     fn rejects_missing_issuer() {
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut claims = valid_claims();
         claims.as_object_mut().unwrap().remove("iss");
         let token = sign_rs256(claims);
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "token without an iss claim must be rejected"
         );
     }
@@ -377,12 +359,11 @@ mod jwt_validation_tests {
     #[test]
     fn rejects_expired_token() {
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut claims = valid_claims();
         claims["exp"] = serde_json::json!(now() - 3600);
         let token = sign_rs256(claims);
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "expired token must be rejected"
         );
     }
@@ -390,12 +371,11 @@ mod jwt_validation_tests {
     #[test]
     fn rejects_missing_exp() {
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut claims = valid_claims();
         claims.as_object_mut().unwrap().remove("exp");
         let token = sign_rs256(claims);
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "token without an exp claim must be rejected"
         );
     }
@@ -404,12 +384,11 @@ mod jwt_validation_tests {
     fn rejects_unknown_kid() {
         // The token references a key that isn't in the JWKS.
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some("some-other-key".to_string());
         let key = EncodingKey::from_rsa_pem(TEST_KEY_PEM.as_bytes()).unwrap();
         let token = encode(&header, &valid_claims(), &key).unwrap();
-        let err = config.validate(&settings, &token).unwrap_err();
+        let err = config.validate(TEST_AUDIENCE, &token).unwrap_err();
         assert!(
             matches!(err, OidcError::UnknownKid(_)),
             "expected UnknownKid, got: {err:?}"
@@ -421,7 +400,6 @@ mod jwt_validation_tests {
         // Sign a valid token, then corrupt the signature segment. Verifies the
         // RS256 signature is actually checked.
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let token = sign_rs256(valid_claims());
         let mut parts: Vec<&str> = token.split('.').collect();
         let tampered_sig = if parts[2].starts_with('A') {
@@ -432,7 +410,7 @@ mod jwt_validation_tests {
         parts[2] = &tampered_sig;
         let tampered = parts.join(".");
         assert!(
-            config.validate(&settings, &tampered).is_err(),
+            config.validate(TEST_AUDIENCE, &tampered).is_err(),
             "token with a tampered signature must be rejected"
         );
     }
@@ -446,7 +424,6 @@ mod jwt_validation_tests {
         // RS256 and reject the HS256 token on algorithm grounds, before any
         // signature check.
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
 
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some(TEST_KID.to_string());
@@ -455,7 +432,7 @@ mod jwt_validation_tests {
         let secret = EncodingKey::from_secret(JWK_N.as_bytes());
         let token = encode(&header, &valid_claims(), &secret).unwrap();
 
-        let err = config.validate(&settings, &token).unwrap_err();
+        let err = config.validate(TEST_AUDIENCE, &token).unwrap_err();
         assert!(
             matches!(err, OidcError::InvalidToken(_)),
             "HS256 token must be rejected, got: {err:?}"
@@ -469,7 +446,6 @@ mod jwt_validation_tests {
         // manually: base64url(header).base64url(claims). with an empty sig.
         use base64::Engine;
         let config = test_config();
-        let settings = test_settings(TEST_AUDIENCE);
         let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
         let header = engine.encode(
             serde_json::json!({ "alg": "none", "typ": "JWT", "kid": TEST_KID }).to_string(),
@@ -477,7 +453,7 @@ mod jwt_validation_tests {
         let payload = engine.encode(valid_claims().to_string());
         let token = format!("{header}.{payload}.");
         assert!(
-            config.validate(&settings, &token).is_err(),
+            config.validate(TEST_AUDIENCE, &token).is_err(),
             "unsigned (alg: none) token must be rejected"
         );
     }

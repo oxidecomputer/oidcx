@@ -12,7 +12,7 @@ use crate::providers::ProviderConfig;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
-    pub audience: String,
+    pub audience: StringParam,
     pub policy_path: PathBuf,
     pub log_directory: Option<String>,
     pub port: Option<u16>,

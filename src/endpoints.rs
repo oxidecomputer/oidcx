@@ -64,7 +64,7 @@ pub async fn exchange(
         let provider = provider.read().unwrap();
         let claims = provider
             .config
-            .validate(&ctx.settings, &body.caller_identity)
+            .validate(&ctx.audience, &body.caller_identity)
             .map_err(|err| {
                 tracing::info!(?err, "Failed to validate token");
                 HttpError::for_bad_request(None, "Token validation failed".to_string())

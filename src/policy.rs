@@ -482,7 +482,7 @@ mod tests {
         let schema = load_schema();
         let policy_set: PolicySet = cedar_src.parse().expect("failed to parse test policy");
         let settings = crate::settings::Settings {
-            audience: String::new(),
+            audience: String::new().into(),
             policy_path: std::path::PathBuf::new(),
             log_directory: None,
             port: None,

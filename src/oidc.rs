@@ -228,7 +228,7 @@ mod tests {
 
 #[cfg(test)]
 mod jwt_validation_tests {
-use super::*;
+    use super::*;
     use jsonwebtoken::{EncodingKey, Header, encode};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -311,7 +311,9 @@ use super::*;
         let config = test_config();
         let token = sign_rs256(valid_claims());
         assert!(
-            config.validate("https://some-other-service.example.com", &token).is_err(),
+            config
+                .validate("https://some-other-service.example.com", &token)
+                .is_err(),
             "token with mismatched audience must be rejected"
         );
     }

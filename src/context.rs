@@ -2,12 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use secrecy::ExposeSecret;
 use std::{
     collections::HashMap,
     error::Error as StdError,
     sync::{Arc, RwLock},
 };
-use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use cedar_policy::{Entity, PolicySet, Schema};
@@ -99,7 +99,11 @@ impl Context {
         let policy_set: PolicySet = policy_src.parse().map_err(PolicyError::InitPolicy)?;
 
         Ok(Context {
-            audience: settings.audience.resolve(settings.params_base_path.as_deref())?.expose_secret().to_string(),
+            audience: settings
+                .audience
+                .resolve(settings.params_base_path.as_deref())?
+                .expose_secret()
+                .to_string(),
             providers,
             policy: Policy::new(schema, policy_set, github_tokens.clone()),
             oxide_tokens: OxideTokens::new(&settings)?,

@@ -5,6 +5,7 @@
 use dropshot::{HttpError, HttpResponseOk, RequestContext, TypedBody, endpoint};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::token::github::GitHubTokenRequest;
 use crate::token::oxide::OxideTokenRequest;
@@ -35,6 +36,7 @@ pub enum TokenRequest {
     path = "/exchange",
     method = POST,
 }]
+#[instrument(skip(rqctx))]
 pub async fn exchange(
     rqctx: RequestContext<Context>,
     body: TypedBody<ExchangeBody>,

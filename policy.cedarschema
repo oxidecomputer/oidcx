@@ -54,6 +54,11 @@ namespace Oidcx {
         resource: Repository,
     };
 
+    action "checks:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
     // Oxide silo deployment
     action "deploy" appliesTo {
         principal: WorkflowRun,

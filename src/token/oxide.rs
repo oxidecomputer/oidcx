@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use tap::TapFallible;
 use thiserror::Error;
+use tracing::instrument;
 use v_api_param::ParamResolutionError;
 
 use crate::{
@@ -120,6 +121,7 @@ impl OxideTokens {
         })
     }
 
+    #[instrument(skip(self), err(Debug))]
     pub async fn get(&self, request: &OxideTokenRequest) -> Result<Token, OxideError> {
         let Some(state) = &self.state else {
             return Err(OxideError::NotConfigured.into());
@@ -134,7 +136,10 @@ impl OxideTokens {
         let client = state
             .clients
             .get(&request.silo.to_string())
-            .ok_or_else(|| OxideError::SiloNotConfigured(request.silo.to_string()))?;
+            .ok_or_else(|| {
+                tracing::info!(available = ?state.clients.keys(), "Requested silo has not found");
+                OxideError::SiloNotConfigured(request.silo.to_string())
+            })?;
 
         let device_response = match client
             .device_auth_request()

@@ -36,13 +36,15 @@ pub enum TokenRequest {
     path = "/exchange",
     method = POST,
 }]
-#[instrument(skip(rqctx))]
+#[instrument(skip(rqctx, body))]
 pub async fn exchange(
     rqctx: RequestContext<Context>,
     body: TypedBody<ExchangeBody>,
 ) -> Result<HttpResponseOk<Token>, HttpError> {
     let ctx = rqctx.context();
     let body = body.into_inner();
+
+    tracing::info!(request = ?body.request, "Exchange request received");
 
     let issuer = jsonwebtoken::dangerous::insecure_decode::<IssuerClaim>(&body.caller_identity)
         .map_err(|err| {

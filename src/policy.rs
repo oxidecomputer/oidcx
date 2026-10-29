@@ -66,6 +66,10 @@ pub fn workflow_run_entity(claims: &Claims) -> Result<Entity, PolicyError> {
             RestrictedExpression::new_string(claims.get_str("event_name").unwrap_or("").into()),
         ),
         (
+            "ref".into(),
+            RestrictedExpression::new_string(claims.get_str("ref").unwrap_or("").into()),
+        ),
+        (
             "iss".into(),
             RestrictedExpression::new_string(claims.get_str("iss").unwrap_or("").into()),
         ),
@@ -810,5 +814,161 @@ mod tests {
             matches!(err, PolicyError::EmptyRequest),
             "expected EmptyRequest, got: {err:?}"
         );
+    }
+
+    // Shape of a rules that allows GitHub actions to manage environments
+    const ENVIRONMENTS_ADMIN_POLICY: &str = r#"
+        permit (
+            principal is Oidcx::WorkflowRun,
+            action in [
+                Oidcx::Action::"administration:write",
+                Oidcx::Action::"environments:write",
+                Oidcx::Action::"members:read"
+            ],
+            resource is Oidcx::Repository
+        )
+        when {
+            principal.repository == "oxidecomputer/corp-services" &&
+            resource.name == "oxidecomputer/corp-services" &&
+            principal has environment &&
+            principal.environment == "test-environments" &&
+            ["push", "workflow_dispatch"].contains(principal.event_name)
+        };
+    "#;
+
+    fn environments_admin_claims(environment: &str, event_name: &str) -> Claims {
+        Claims::from_json(serde_json::json!({
+            "jti": "environments-run",
+            "iss": "https://token.actions.githubusercontent.com",
+            "repository": "oxidecomputer/corp-services",
+            "repository_owner": "oxidecomputer",
+            "repository_visibility": "private",
+            "event_name": event_name,
+            "environment": environment,
+        }))
+    }
+
+    fn corp_services() -> Entity {
+        Policy::repository_entity("oxidecomputer/corp-services", "private").unwrap()
+    }
+
+    #[test]
+    fn environments_admin_is_granted_to_its_environment() {
+        let policy = policy_with(ENVIRONMENTS_ADMIN_POLICY);
+        let principal =
+            workflow_run_entity(&environments_admin_claims("test-environments", "push")).unwrap();
+        for action in ["administration:write", "environments:write", "members:read"] {
+            policy
+                .authorize(&principal, action, corp_services())
+                .unwrap_or_else(|err| panic!("{action} should be permitted, got: {err:?}"));
+        }
+    }
+
+    #[test]
+    fn environments_admin_is_refused_elsewhere() {
+        let policy = policy_with(ENVIRONMENTS_ADMIN_POLICY);
+        for (environment, event_name) in [
+            ("production", "push"),
+            ("test-environments", "pull_request"),
+        ] {
+            let principal =
+                workflow_run_entity(&environments_admin_claims(environment, event_name)).unwrap();
+            let err = policy
+                .authorize(&principal, "administration:write", corp_services())
+                .unwrap_err();
+            assert!(
+                matches!(err, PolicyError::NotMatching(_)),
+                "expected {environment}/{event_name} to be refused, got: {err:?}"
+            );
+        }
+    }
+
+    fn deploy_claims(environment: &str, git_ref: &str) -> Claims {
+        Claims::from_json(serde_json::json!({
+            "jti": "deploy-run",
+            "iss": "https://token.actions.githubusercontent.com",
+            "repository": "oxidecomputer/private-repo",
+            "repository_owner": "oxidecomputer",
+            "repository_visibility": "private",
+            "event_name": "workflow_dispatch",
+            "environment": environment,
+            "ref": git_ref,
+        }))
+    }
+
+    #[test]
+    fn workflow_run_entity_includes_the_ref() {
+        let entity =
+            workflow_run_entity(&deploy_claims("production.x", "refs/heads/main")).unwrap();
+        assert_eq!(
+            entity.attr("ref").unwrap().unwrap(),
+            EvalResult::String("refs/heads/main".into())
+        );
+        let schema = load_schema();
+        Entities::from_entities([entity], Some(&schema))
+            .expect("a workflow run with a ref should conform to the schema");
+    }
+
+    #[tokio::test]
+    async fn permit_can_require_the_main_branch() {
+        let policy = policy_with(
+            r#"
+            permit(
+                principal is Oidcx::WorkflowRun,
+                action == Oidcx::Action::"deploy",
+                resource is Oidcx::Silo
+            ) when {
+                principal has environment &&
+                principal.environment like "production.*" &&
+                principal.ref == "refs/heads/main" &&
+                resource.url == "https://prod.sys.oxide-preview.com/"
+            };
+        "#,
+        );
+        let main = workflow_run_entity(&deploy_claims("production.x", "refs/heads/main")).unwrap();
+        policy
+            .ensure_allowed(&main, &prod_deploy_request())
+            .await
+            .expect("a run from main should be permitted");
+
+        let branch =
+            workflow_run_entity(&deploy_claims("production.x", "refs/heads/attacker")).unwrap();
+        let err = policy
+            .ensure_allowed(&branch, &prod_deploy_request())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PolicyError::NotMatching(_)),
+            "expected a run from another branch to be refused, got: {err:?}"
+        );
+    }
+
+    /// A read permit must not be able to stand in for the write actions.
+    #[test]
+    fn read_only_repository_actions_are_distinct_from_write() {
+        let policy = policy_with(
+            r#"
+            permit (
+                principal is Oidcx::WorkflowRun,
+                action in [
+                    Oidcx::Action::"administration:read",
+                    Oidcx::Action::"environments:read"
+                ],
+                resource is Oidcx::Repository
+            );
+        "#,
+        );
+        let principal = workflow_run_entity(&github_actions_claims()).unwrap();
+        let resource = || Policy::repository_entity("oxidecomputer/hubris", "public").unwrap();
+        policy
+            .authorize(&principal, "administration:read", resource())
+            .unwrap();
+        policy
+            .authorize(&principal, "environments:read", resource())
+            .unwrap();
+        assert!(matches!(
+            policy.authorize(&principal, "administration:write", resource()),
+            Err(PolicyError::NotMatching(_))
+        ));
     }
 }

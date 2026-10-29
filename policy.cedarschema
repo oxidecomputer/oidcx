@@ -13,6 +13,8 @@ namespace Oidcx {
         repository_owner: String,
         repository_visibility: String,
         event_name: String,
+        // The git ref the run was started from, such as refs/heads/main.
+        ref: String,
         environment?: String,
         iss: String,
     };
@@ -55,6 +57,38 @@ namespace Oidcx {
     };
 
     action "checks:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Reading repository administration settings, such as environments,
+    // branch policies and rulesets, without being able to change them.
+    action "administration:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Reading environment variables.
+    action "environments:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Repository administration, for creating environments and their branch
+    // policies.
+    action "administration:write" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Environment variables and secrets.
+    action "environments:write" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
+    // Organization membership, for resolving teams.
+    action "members:read" appliesTo {
         principal: WorkflowRun,
         resource: Repository,
     };

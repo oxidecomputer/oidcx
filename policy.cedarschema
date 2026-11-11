@@ -56,6 +56,11 @@ namespace Oidcx {
         resource: Repository,
     };
 
+    action "attestations:read" appliesTo {
+        principal: WorkflowRun,
+        resource: Repository,
+    };
+
     action "checks:read" appliesTo {
         principal: WorkflowRun,
         resource: Repository,
